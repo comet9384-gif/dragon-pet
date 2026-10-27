@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dragon Pet: Игнис</title>
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; font-family: system-ui, sans-serif; background: #15121f; color: #f1ead8; min-height: 100vh; }
+.layout { max-width: 480px; margin: 0 auto; padding: 16px; display: grid; gap: 14px; }
+h1 { margin: 0; font-size: 1.5rem; }
+.sub { margin: 4px 0 0; color: #bfb49a; font-size: .95rem; }
+.card { background: #201a2e; border: 1px solid #3a3050; border-radius: 12px; padding: 14px; }
+.stage { display: grid; justify-items: center; gap: 8px; }
+.stage svg { width: 100%; max-width: 280px; height: auto; }
+.mood { margin: 0; text-align: center; min-height: 1.4em; }
+.bars { display: grid; gap: 12px; }
+.bar-head { display: flex; justify-content: space-between; font-size: .9rem; color: #bfb49a; margin-bottom: 4px; }
+.track { height: 12px; background: #15121f; border-radius: 999px; overflow: hidden; border: 1px solid #3a3050; }
+.track i { display: block; height: 100%; background: #f7d774; width: 0; transition: width .4s ease; }
+.actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+button { font: inherit; min-height: 44px; border-radius: 8px; border: 1px solid #9b4a68; background: #7a2e4a; color: #f1ead8; padding: 8px 10px; cursor: pointer; }
+button:disabled { opacity: .5; cursor: default; }
+button:focus-visible { outline: 3px solid #f7d774; outline-offset: 2px; }
+.note { margin: 10px 0 0; min-height: 1.4em; }
+.error { color: #ff8a8a; }
+.log { margin: 0; color: #bfb49a; font-size: .95rem; }
+@media (prefers-reduced-motion: reduce) { .track i { transition: none; } }
+</style>
+</head>
+<body>
+<main class="layout">
+  <header>
+    <h1>Dragon Pet: Игнис</h1>
+    <p class="sub">Один дракон на всю компанию. Кормите, катайте и укладывайте его спать вместе. Силы и настроение тают со временем.</p>
+  </header>
+
+  <section class="card stage">
+    <svg id="dragon" viewBox="0 0 240 200" role="img" aria-label="Дракон Игнис"></svg>
+    <p id="mood" class="mood"></p>
+  </section>
+
+  <section class="card bars" id="bars" aria-live="polite"></section>
+
+  <section class="card">
+    <div class="actions">
+      <button type="button" data-act="feed" disabled>Покормить бараниной</button>
+      <button type="button" data-act="play" disabled>Полетать</button>
+      <button type="button" data-act="pet" disabled>Погладить</button>
+      <button type="button" data-act="rest" disabled>Уложить спать</button>
+    </div>
+    <p id="error" class="note error" role="alert"></p>
+  </section>
+
+  <section class="card">
+    <p id="last" class="log">Пока никто не заходил к Игнису.</p>
+  </section>
+</main>
+
+<script>
+(async () => {
+  const errorEl = document.getElementById('error');
+  if (!window.shapes?.shared) {
+    errorEl.textContent = 'Откройте в shapes.inc, чтобы играть вместе.';
+    return;
+  }
+
+  const LABELS = { hunger: 'Сытость', energy: 'Силы', joy: 'Настроение' };
+  const DECAY = { hunger: 1.2, energy: 0.8, joy: 1.0 };
+  const ACTIONS = {
+    feed: { text: 'покормил(а) Игниса бараниной', fx: { hunger: 35, joy: 5, energy: -3 } },
+    play: { text: 'катал(а) Игниса в облаках', fx: { joy: 25, energy: -20, hunger: -8 } },
+    pet: { text: 'погладил(а) Игниса по чешуе', fx: { joy: 15 } },
+    rest: { text: 'уложил(а) Игниса спать', fx: { energy: 40, hunger: -5, joy: -3 } }
+  };
+  const clamp = v => Math.max(0, Math.min(100, v));
+
+  function current(shared, now) {
+    const minutes = Math.max(0, (now - shared.at) / 60000);
+    const out = {};
+    for (const key of Object.keys(DECAY)) out[key] = clamp(shared.base[key] - DECAY[key] * minutes);
+    return out;
+  }
+
+  function ago(time) {
+    const minutes = Math.round((Date.now() - time) / 60000);
+    return minutes < 1 ? 'только что' : `${minutes} мин назад`;
+  }
+
+  function moodText(st) {
+    if (st.hunger < 25) return 'Игнис ворчит: в брюхе пусто. Нужна баранина.';
+    if (st.energy < 25) return 'Игнис зевает и кладёт голову на лапы.';
+    if (st.joy < 30) return 'Игнис тоскливо смотрит на небо.';
+    return 'Игнис довольно урчит и щёлкает пастью.';
+  }
+
+  function drawDragon(st) {
+    const body = st.energy < 25 ? '#3d6b52' : '#2e8b57';
+    const dark = '#1b5e3b';
+    const belly = '#f3e3b5';
+    const eyes = st.energy < 25
+      ? `<path d='M96 66 Q104 72 112 66' fill='none' stroke='#111' stroke-width='3' stroke-linecap='round'/><path d='M128 66 Q136 72 144 66' fill='none' stroke='#111' stroke-width='3' stroke-linecap='round'/>`
+      : `<circle cx='104' cy='64' r='6' fill='#fff'/><circle cx='105' cy='64' r='3' fill='#111'/><circle cx='136' cy='64' r='6' fill='#fff'/><circle cx='137' cy='64' r='3' fill='#111'/>`;
+    const mouth = st.joy >= 60
+      ? `<path d='M106 92 Q120 102 134 92' fill='none' stroke='#111' stroke-width='3' stroke-linecap='round'/>`
+      : st.hunger < 25
+        ? `<path d='M108 96 Q120 88 132 96' fill='none' stroke='#111' stroke-width='3' stroke-linecap='round'/>`
+        : `<path d='M108 94 L132 94' fill='none' stroke='#111' stroke-width='3' stroke-linecap='round'/>`;
+    document.getElementById('dragon').innerHTML = `
+      <path d='M70 120 C30 60 20 40 40 30 C60 50 70 80 88 100 Z' fill='${body}' stroke='${dark}' stroke-width='2'/>
+      <path d='M170 120 C210 60 220 40 200 30 C180 50 170 80 152 100 Z' fill='${body}' stroke='${dark}' stroke-width='2'/>
+      <path d='M180 150 C220 160 232 140 226 124 C214 134 200 136 176 140 Z' fill='${body}' stroke='${dark}' stroke-width='2'/>
+      <ellipse cx='120' cy='130' rx='55' ry='42' fill='${body}' stroke='${dark}' stroke-width='2'/>
+      <ellipse cx='120' cy='142' rx='30' ry='22' fill='${belly}' opacity='.85'/>
+      <rect x='92' y='160' width='14' height='26' rx='6' fill='${dark}'/>
+      <rect x='134' y='160' width='14' height='26' rx='6' fill='${dark}'/>
+      <path d='M96 44 L90 20 L108 40 Z' fill='${dark}'/>
+      <path d='M144 44 L150 20 L132 40 Z' fill='${dark}'/>
+      <circle cx='120' cy='74' r='34' fill='${body}' stroke='${dark}' stroke-width='2'/>
+      <ellipse cx='120' cy='86' rx='20' ry='12' fill='${belly}' opacity='.85'/>
+      ${eyes}
+      ${mouth}
+    `;
+  }
+
+  function renderBars(st) {
+    document.getElementById('bars').replaceChildren(...Object.keys(LABELS).map(key => {
+      const row = document.createElement('div');
+      const head = document.createElement('div');
+      head.className = 'bar-head';
+      const name = document.createElement('span');
+      name.textContent = LABELS[key];
+      const value = document.createElement('span');
+      value.textContent = Math.round(st[key]);
+      head.append(name, value);
+      const track = document.createElement('div');
+      track.className = 'track';
+      track.setAttribute('role', 'progressbar');
+      track.setAttribute('aria-label', LABELS[key]);
+      track.setAttribute('aria-valuemin', '0');
+      track.setAttribute('aria-valuemax', '100');
+      track.setAttribute('aria-valuenow', String(Math.round(st[key])));
+      const fill = document.createElement('i');
+      fill.style.width = `${st[key]}%`;
+      track.append(fill);
+      row.append(head, track);
+      return row;
+    }));
+  }
+
+  const s = await window.shapes.shared.connect({
+    initialState: { base: { hunger: 70, energy: 80, joy: 70 }, at: Date.now(), last: null }
+  });
+  let shared = s.getState().shared;
+
+  function draw() {
+    const st = current(shared, Date.now());
+    drawDragon(st);
+    renderBars(st);
+    document.getElementById('mood').textContent = moodText(st);
+    const last = shared.last;
+    document.getElementById('last').textContent = last
+      ? `${last.by} ${last.text}, ${ago(last.at)}.`
+      : 'Пока никто не заходил к Игнису.';
+  }
+
+  s.subscribe(snapshot => {
+    shared = snapshot.shared;
+    draw();
+  });
+
+  const buttons = [...document.querySelectorAll('button[data-act]')];
+  buttons.forEach(b => { b.disabled = false; });
+
+  function setBusy(busy) {
+    buttons.forEach(b => { b.disabled = busy; });
+  }
+
+  document.querySelector('.actions').addEventListener('click', async event => {
+    const button = event.target.closest('button[data-act]');
+    if (!button) return;
+    const act = ACTIONS[button.dataset.act];
+    const who = s.actor?.name || 'Кто-то';
+    errorEl.textContent = '';
+    setBusy(true);
+    try {
+      await s.update(x => {
+        const now = Date.now();
+        const cur = current(x, now);
+        const base = {};
+        for (const key of Object.keys(DECAY)) base[key] = clamp(cur[key] + (act.fx[key] || 0));
+        return { ...x, base, at: now, last: { by: who, text: act.text, at: now } };
+      });
+    } catch (err) {
+      errorEl.textContent = 'Не получилось сохранить. Попробуйте ещё раз.';
+    } finally {
+      setBusy(false);
+    }
+  });
+
+  draw();
+  setInterval(draw, 15000);
+})().catch(err => {
+  document.getElementById('error').textContent = 'Игра не запустилась. Обновите страницу.';
+});
+</script>
+</body>
+</html>
